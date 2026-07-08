@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SNAKE BROS. — платформенная змейка</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='6' width='10' height='4' rx='2' fill='%2358a800'/%3E%3Crect x='9' y='4' width='6' height='6' rx='2' fill='%2368b810'/%3E%3Cpath d='M9 4h6v2H9z' fill='%23e03c28'/%3E%3Ccircle cx='13' cy='8' r='1' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
@@ -46,6 +47,7 @@
     height:auto;
     image-rendering:pixelated;
     background:var(--sky);
+    touch-action:none;
   }
   /* CRT-сканлайны + виньетка */
   .cabinet::after{
@@ -170,6 +172,12 @@ const AudioEngine = (() => {
                 ['G4','C5','E5','G5','C6','E6','G6'].forEach((n, i) =>
                   tone(nf(n), t + i * 0.11, i === 6 ? 0.6 : 0.14, 'square', 0.45)); },
     tick()    { tone(nf('C3'), ac.currentTime, 0.03, 'square', 0.12); },
+    stomp()   { const t = ac.currentTime;
+                noise(t, 0.08, 0.4, 300);
+                tone(260, t, 0.14, 'square', 0.5, 90); },
+    record()  { const t = ac.currentTime;
+                ['C5','E5','G5','C6','G5','C6','E6','C7'].forEach((n, i) =>
+                  tone(nf(n), t + i * 0.1, i === 7 ? 0.5 : 0.13, 'square', 0.45)); },
     pause_()  { const t = ac.currentTime;
                 ['E6','C6','E6','C6'].forEach((n, i) =>
                   tone(nf(n), t + i * 0.07, 0.07, 'square', 0.35)); },
@@ -310,6 +318,8 @@ const G = {
   score: 0, coins: 0, lives: 3, level: 1,
   bricks: new Set(),
   items: [],             // {type:'coin'|'shroom'|'star'|'oneup', x, y, born, ttl}
+  enemies: [],           // {x,y,px,py,dir,moveT,interval,dead,deadT}
+  newRecord: false,
   starT: 0,
   shakeT: 0, shakeMag: 0,
   freezeT: 0,            // hit-stop
@@ -319,6 +329,25 @@ const G = {
   time: 0,
   blink: 0,
 };
+
+/* ---- таблица рекордов (localStorage) ---- */
+const HS_KEY = 'snakebros.scores';
+function loadScores() {
+  try { return JSON.parse(localStorage.getItem(HS_KEY)) || []; }
+  catch { return []; }
+}
+function submitScore() {
+  const scores = loadScores();
+  G.newRecord = G.score > 0 && (!scores.length || G.score > scores[0].s);
+  scores.push({ s: G.score, c: G.coins, l: G.level });
+  scores.sort((a, b) => b.s - a.s);
+  scores.length = Math.min(scores.length, 5);
+  try { localStorage.setItem(HS_KEY, JSON.stringify(scores)); } catch {}
+}
+function hiScore() {
+  const s = loadScores();
+  return s.length ? s[0].s : 0;
+}
 
 const clouds = [];
 for (let i = 0; i < 6; i++)
@@ -331,6 +360,7 @@ function freeCell(minDistHead = 3) {
     if (G.bricks.has(key2(x, y))) continue;
     if (G.snake.some(s => s.x === x && s.y === y)) continue;
     if (G.items.some(it => it.x === x && it.y === y)) continue;
+    if (G.enemies.some(e => !e.dead && e.x === x && e.y === y)) continue;
     if (head && Math.abs(x - head.x) + Math.abs(y - head.y) < minDistHead) continue;
     return { x, y };
   }
@@ -355,6 +385,66 @@ function addBrickCluster() {
   }
 }
 
+/* ---- враги-гумбы ---- */
+function spawnEnemy() {
+  const c = freeCell(8);
+  if (!c) return;
+  const horiz = Math.random() < 0.6;
+  G.enemies.push({
+    x: c.x, y: c.y, px: c.x, py: c.y,
+    dir: horiz ? { x: Math.random() < 0.5 ? 1 : -1, y: 0 } : { x: 0, y: Math.random() < 0.5 ? 1 : -1 },
+    moveT: rnd(0, 200), interval: rnd(380, 470),
+    dead: false, deadT: 0,
+  });
+}
+
+function enemyBlocked(x, y, self) {
+  if (isBorder(x, y)) return true;                       // трубы врагам тоже закрыты
+  if (G.bricks.has(key2(x, y))) return true;
+  if (G.snake.some((s, i) => i > 0 && s.x === x && s.y === y)) return true;
+  if (G.enemies.some(e => e !== self && !e.dead && e.x === x && e.y === y)) return true;
+  return false;
+}
+
+function squashEnemy(e) {
+  e.dead = true; e.deadT = 600;
+  addScore(200, fx(e.x), fy(e.y), '#ffb060');
+  AudioEngine.play('stomp');
+  spawnParticles(fx(e.x), fy(e.y), {
+    n: 10, color: ['#ad4e0e','#7c3808','#e8c090'], shape: 'rect',
+    szMin: 3, szMax: 6, spMin: 1, spMax: 3.5, up: 2.5, g: 0.25, bounce: true,
+  });
+}
+
+function updateEnemies(dt) {
+  const head = G.snake[0];
+  for (let i = G.enemies.length - 1; i >= 0; i--) {
+    const e = G.enemies[i];
+    if (e.dead) {
+      e.deadT -= dt;
+      if (e.deadT <= 0) G.enemies.splice(i, 1);
+      continue;
+    }
+    e.moveT += dt;
+    if (e.moveT >= e.interval) {
+      e.moveT -= e.interval;
+      e.px = e.x; e.py = e.y;
+      let nx = e.x + e.dir.x, ny = e.y + e.dir.y;
+      if (enemyBlocked(nx, ny, e)) {
+        e.dir = { x: -e.dir.x, y: -e.dir.y };            // разворот
+        nx = e.x + e.dir.x; ny = e.y + e.dir.y;
+        if (enemyBlocked(nx, ny, e)) { nx = e.x; ny = e.y; } // зажат — стоит
+      }
+      e.x = nx; e.y = ny;
+    }
+    // столкновение с головой
+    if (head && e.x === head.x && e.y === head.y) {
+      if (G.starT > 0) squashEnemy(e);
+      else { die(); return; }
+    }
+  }
+}
+
 function resetSnake() {
   G.snake = [];
   for (let i = 0; i < 4; i++) G.snake.push({ x: 11 - i, y: 10 });
@@ -366,6 +456,7 @@ function resetSnake() {
 function newGame() {
   G.score = 0; G.coins = 0; G.lives = 3; G.level = 1;
   G.bricks.clear(); G.items.length = 0;
+  G.enemies.length = 0; G.newRecord = false;
   G.moveInterval = 150;
   particles.length = 0; floaters.length = 0;
   resetSnake();
@@ -436,6 +527,13 @@ function step() {
       if (!star) { die(); return; }
       break;
     }
+  }
+
+  // враг на пути головы
+  const en = G.enemies.find(e => !e.dead && e.x === nx && e.y === ny);
+  if (en) {
+    if (star) squashEnemy(en);
+    else { die(); return; }
   }
 
   G.snake.unshift({ x: nx, y: ny });
@@ -529,6 +627,9 @@ function afterClear() {
   addBrickCluster();
   if (G.level >= 3) addBrickCluster();
   if (G.level % 3 === 0) spawnItem('oneup', 12000);
+  // с мира 1-2 приходят гумбы, максимум 4
+  const want = Math.min(4, G.level - 1);
+  while (G.enemies.filter(e => !e.dead).length < want) spawnEnemy();
   spawnItem('coin');
   G.state = 'PLAYING';
   AudioEngine.music(true);
@@ -551,11 +652,21 @@ function die() {
 function afterDeath() {
   G.lives--;
   if (G.lives <= 0) {
+    submitScore();
+    if (G.newRecord) AudioEngine.play('record');
     G.state = 'GAMEOVER';
   } else {
     G.items = G.items.filter(it => it.type === 'coin');
     if (!G.items.length) spawnItem('coin');
     resetSnake();
+    // отогнать гумб от точки респауна
+    const h = G.snake[0];
+    for (const e of G.enemies) {
+      if (!e.dead && Math.abs(e.x - h.x) + Math.abs(e.y - h.y) < 5) {
+        const c = freeCell(8);
+        if (c) { e.x = c.x; e.y = c.y; e.px = c.x; e.py = c.y; }
+      }
+    }
     G.state = 'PLAYING';
     AudioEngine.music(true);
     AudioEngine.tempo(1);
@@ -608,6 +719,9 @@ function update(dt) {
       if (G.time - it.born > it.ttl) G.items.splice(i, 1);
     }
 
+    updateEnemies(dt);
+    if (G.state !== 'PLAYING') return; // гумба мог убить
+
     G.moveT += dt;
     const iv = G.starT > 0 ? G.moveInterval * 0.82 : G.moveInterval;
     if (G.moveT >= iv) { G.moveT -= iv; step(); }
@@ -643,6 +757,7 @@ function draw() {
   drawBorder();
   drawBricks();
   drawItems();
+  drawEnemies();
   drawSnake();
   drawParticles();
   drawFloaters();
@@ -855,6 +970,54 @@ function drawStar(x, y, t) {
       { n: 1, color: ['#fff','#fbd000'], shape: 'spark', szMin: 1.5, szMax: 3, spMin: 0, spMax: 0.4, g: -0.02, lifeMin: 200, lifeMax: 500 });
 }
 
+/* ---- враги-гумбы ---- */
+function drawEnemies() {
+  for (const e of G.enemies) {
+    const et = clamp(e.moveT / e.interval, 0, 1);
+    const x = e.dead ? fx(e.x) : lerp(fx(e.px), fx(e.x), et);
+    const y = e.dead ? fy(e.y) : lerp(fy(e.py), fy(e.y), et);
+    const walk = Math.sin(G.time / 90 + e.interval);
+    cx.save();
+    cx.translate(x, y);
+    if (e.dead) {
+      // сплющен
+      cx.globalAlpha = clamp(e.deadT / 600, 0, 1);
+      cx.scale(1.25, 0.3);
+      cx.translate(0, 22);
+    } else {
+      cx.translate(0, Math.abs(walk) * -2);           // подпрыгивание при ходьбе
+    }
+    // тень
+    cx.fillStyle = 'rgba(0,0,0,.18)';
+    cx.beginPath(); cx.ellipse(0, 14, 11, 3, 0, 0, Math.PI * 2); cx.fill();
+    // лапки
+    cx.fillStyle = '#5c2c04';
+    cx.beginPath(); cx.ellipse(-6 + (e.dead ? 0 : walk * 2.5), 12, 5, 3.5, 0, 0, Math.PI * 2); cx.fill();
+    cx.beginPath(); cx.ellipse( 6 - (e.dead ? 0 : walk * 2.5), 12, 5, 3.5, 0, 0, Math.PI * 2); cx.fill();
+    // тело-гриб
+    cx.fillStyle = '#ad4e0e';
+    cx.beginPath();
+    cx.moveTo(-13, 9); cx.quadraticCurveTo(-14, -13, 0, -13);
+    cx.quadraticCurveTo(14, -13, 13, 9); cx.closePath(); cx.fill();
+    cx.fillStyle = '#c96a20';
+    cx.beginPath();
+    cx.moveTo(-10, -2); cx.quadraticCurveTo(-10, -11, 0, -11);
+    cx.quadraticCurveTo(6, -11, 8, -6); cx.closePath(); cx.fill();
+    // сердитые брови и глаза
+    cx.fillStyle = '#fff';
+    cx.beginPath(); cx.ellipse(-4.5, -1, 3.4, 4.4, 0, 0, Math.PI * 2);
+    cx.ellipse(4.5, -1, 3.4, 4.4, 0, 0, Math.PI * 2); cx.fill();
+    cx.fillStyle = '#111';
+    cx.beginPath(); cx.arc(-3.4, 0.5, 1.7, 0, Math.PI * 2); cx.arc(3.4, 0.5, 1.7, 0, Math.PI * 2); cx.fill();
+    cx.strokeStyle = '#111'; cx.lineWidth = 2.2; cx.lineCap = 'round';
+    cx.beginPath(); cx.moveTo(-8, -6.5); cx.lineTo(-1.5, -4); cx.moveTo(8, -6.5); cx.lineTo(1.5, -4); cx.stroke();
+    // рот
+    cx.fillStyle = '#111';
+    cx.fillRect(-3, 6, 6, 1.8);
+    cx.restore();
+  }
+}
+
 /* ---- змейка ---- */
 function segPos(i, t) {
   const cur = G.snake[i];
@@ -969,6 +1132,10 @@ function drawHUD() {
   cx.textAlign = 'left';
   cx.fillText('SCORE', 24, 14);
   cx.fillText(String(G.score).padStart(6, '0'), 24, 34);
+  cx.fillStyle = '#9aa4ff';
+  cx.fillText('HI', 116, 14);
+  cx.fillText(String(Math.max(hiScore(), G.score)).padStart(6, '0'), 104, 34);
+  cx.fillStyle = '#fff';
   // монетка
   cx.fillStyle = '#fbd000';
   cx.beginPath(); cx.ellipse(216, 40, 6, 8, 0, 0, Math.PI * 2); cx.fill();
@@ -1033,12 +1200,21 @@ function drawTitle() {
 
   cx.font = '11px "Press Start 2P", monospace';
   cx.fillStyle = '#cfe0ff';
-  cx.fillText('СОБИРАЙ МОНЕТЫ. НЕ ВРЕЗАЙСЯ. ЗВЕЗДА ЛОМАЕТ КИРПИЧИ.', W / 2, 320);
-  cx.fillText('ТРУБЫ ТЕЛЕПОРТИРУЮТ НА ДРУГОЙ КРАЙ.', W / 2, 344);
+  cx.fillText('СОБИРАЙ МОНЕТЫ. НЕ ВРЕЗАЙСЯ. ЗВЕЗДА ЛОМАЕТ КИРПИЧИ.', W / 2, 312);
+  cx.fillText('ТРУБЫ ТЕЛЕПОРТИРУЮТ. БЕРЕГИСЬ ГУМБ С МИРА 1-2!', W / 2, 336);
+  if (hiScore() > 0) {
+    cx.fillStyle = '#9aa4ff';
+    cx.fillText('HI-SCORE ' + String(hiScore()).padStart(6, '0'), W / 2, 372);
+  }
   if (Math.floor(G.blink / 550) % 2 === 0) {
     cx.font = '15px "Press Start 2P", monospace';
     cx.fillStyle = '#fff';
-    cx.fillText('PRESS ENTER', W / 2, 420);
+    cx.fillText(IS_TOUCH ? 'TAP TO START' : 'PRESS ENTER', W / 2, 424);
+  }
+  if (IS_TOUCH) {
+    cx.font = '9px "Press Start 2P", monospace';
+    cx.fillStyle = '#8a90c0';
+    cx.fillText('СВАЙП — ДВИЖЕНИЕ, ТАП — СТАРТ/ПАУЗА', W / 2, 456);
   }
   cx.font = '9px "Press Start 2P", monospace';
   cx.fillStyle = '#8a90c0';
@@ -1048,15 +1224,34 @@ function drawTitle() {
 function drawGameOver() {
   overlay(0.65);
   cx.textAlign = 'center';
-  cx.font = '30px "Press Start 2P", monospace';
-  cx.fillStyle = '#000'; cx.fillText('GAME OVER', W / 2 + 3, 243);
-  cx.fillStyle = '#ff4a4a'; cx.fillText('GAME OVER', W / 2, 240);
+  cx.font = '28px "Press Start 2P", monospace';
+  cx.fillStyle = '#000'; cx.fillText('GAME OVER', W / 2 + 3, 183);
+  cx.fillStyle = '#ff4a4a'; cx.fillText('GAME OVER', W / 2, 180);
   cx.font = '12px "Press Start 2P", monospace';
   cx.fillStyle = '#fbd000';
-  cx.fillText('SCORE ' + String(G.score).padStart(6, '0') + '   WORLD 1-' + G.level, W / 2, 300);
+  cx.fillText('SCORE ' + String(G.score).padStart(6, '0') + '   WORLD 1-' + G.level, W / 2, 228);
+  if (G.newRecord && Math.floor(G.blink / 300) % 2 === 0) {
+    cx.font = '15px "Press Start 2P", monospace';
+    cx.fillStyle = `hsl(${(G.time * 0.3) % 360},95%,60%)`;
+    cx.fillText('NEW RECORD!', W / 2, 262);
+  }
+  // топ-5
+  const scores = loadScores();
+  cx.font = '10px "Press Start 2P", monospace';
+  cx.fillStyle = '#9aa4ff';
+  cx.fillText('— TOP 5 —', W / 2, 300);
+  scores.forEach((r, i) => {
+    const mine = r.s === G.score && r.c === G.coins && r.l === G.level;
+    cx.fillStyle = mine ? '#fbd000' : '#cfe0ff';
+    cx.fillText(
+      (i + 1) + '. ' + String(r.s).padStart(6, '0') + '  x' + String(r.c).padStart(2, '0') + '  1-' + r.l,
+      W / 2, 326 + i * 24
+    );
+  });
   if (Math.floor(G.blink / 550) % 2 === 0) {
+    cx.font = '12px "Press Start 2P", monospace';
     cx.fillStyle = '#fff';
-    cx.fillText('PRESS ENTER', W / 2, 370);
+    cx.fillText(IS_TOUCH ? 'TAP TO RESTART' : 'PRESS ENTER', W / 2, 480);
   }
 }
 
@@ -1113,6 +1308,38 @@ addEventListener('keydown', e => {
     if (d.x !== -last.x || d.y !== -last.y) G.queue.push(d);
   }
 });
+
+/* ---- touch: свайпы + тап ---- */
+const IS_TOUCH = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+let touchStart = null;
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  AudioEngine.init();
+  const t = e.changedTouches[0];
+  touchStart = { x: t.clientX, y: t.clientY };
+}, { passive: false });
+cv.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+cv.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (!touchStart) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y;
+  touchStart = null;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  if (Math.max(adx, ady) < 24) {
+    // тап
+    if (G.state === 'TITLE' || G.state === 'GAMEOVER') newGame();
+    else if (G.state === 'PAUSED') { G.state = 'PLAYING'; AudioEngine.music(true); }
+    else if (G.state === 'PLAYING') { G.state = 'PAUSED'; AudioEngine.music(false); AudioEngine.play('pause_'); }
+    return;
+  }
+  // свайп — доминирующая ось
+  const d = adx > ady ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
+  if (G.state === 'PLAYING' && G.queue.length < 3) {
+    const last = G.queue.length ? G.queue[G.queue.length - 1] : G.dir;
+    if (d.x !== -last.x || d.y !== -last.y) G.queue.push(d);
+  }
+}, { passive: false });
 
 // автопауза при уходе со вкладки
 document.addEventListener('visibilitychange', () => {
