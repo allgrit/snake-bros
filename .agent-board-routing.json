@@ -1,0 +1,12 @@
+{
+  "default_repo": "allgrit/snake-bros",
+  "source_repos": [],
+  "consumer_scope": "Only adapter, integration, e2e, and project-specific orchestration live here. Reusable generator/CLI/skill code must be routed to its owner repo.",
+  "required_project_fields": [
+    "Repository",
+    "Status",
+    "Priority",
+    "Effort",
+    "Type"
+  ]
+}

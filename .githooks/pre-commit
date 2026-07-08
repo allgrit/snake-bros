@@ -1,0 +1,38 @@
+#!/bin/sh
+set -e
+
+if [ -z "${PYTHON:-}" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+  elif [ -x /mnt/c/Users/allgrit/AppData/Local/Programs/Python/Python311/python.exe ]; then
+    PYTHON=/mnt/c/Users/allgrit/AppData/Local/Programs/Python/Python311/python.exe
+  elif [ -x /c/Users/allgrit/AppData/Local/Programs/Python/Python311/python.exe ]; then
+    PYTHON=/c/Users/allgrit/AppData/Local/Programs/Python/Python311/python.exe
+  else
+    PYTHON=python3
+  fi
+fi
+
+if [ -z "${BOARD_SCRIPT:-}" ]; then
+  for candidate in \
+"/mnt/c/Users/allgrit/.claude/skills/gh-issues/gh-board.py" "/c/Users/allgrit/.claude/skills/gh-issues/gh-board.py" "C:/Users/allgrit/.claude/skills/gh-issues/gh-board.py"
+  do
+    if [ -f "$candidate" ]; then
+      BOARD_SCRIPT="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "${BOARD_SCRIPT:-}" ]; then
+  echo "ERROR: gh-board.py not found. Set BOARD_SCRIPT=/path/to/gh-board.py" >&2
+  exit 1
+fi
+
+if [ -f scripts/audit_agent_process.py ]; then
+  "$PYTHON" scripts/audit_agent_process.py
+fi
+
+if [ "${AGENT_BOARD_AUDIT:-1}" = "1" ]; then
+  "$PYTHON" "$BOARD_SCRIPT" audit --repo allgrit/snake-bros --local
+fi
