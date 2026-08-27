@@ -9,3 +9,9 @@
 - Работу начинать через `board pick N --repo allgrit/snake-bros` и закрывать через `board done N "...итог..." --repo allgrit/snake-bros`.
 - Reusable library/generator/CLI/skill work заводить в repo-владельце; consumer repo получает только integration/e2e scope.
 <!-- agent-board:end -->
+
+## Где лежит репозиторий
+
+- Репозиторий на GitHub называется **`allgrit/snake-bros`**, но локальный клон лежит
+  в каталоге `C:\Users\allgrit\Documents\codex\example-01\` — имя каталога не совпадает
+  с именем репозитория. Ориентироваться на `git remote -v`, а не на имя папки.
