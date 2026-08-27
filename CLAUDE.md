@@ -1,0 +1,3 @@
+# snake-bros
+
+@AGENTS.md
