@@ -15,7 +15,7 @@ fi
 
 if [ -z "${BOARD_SCRIPT:-}" ]; then
   for candidate in \
-"/mnt/c/Users/allgrit/.claude/skills/gh-issues/gh-board.py" "/c/Users/allgrit/.claude/skills/gh-issues/gh-board.py" "C:/Users/allgrit/.claude/skills/gh-issues/gh-board.py"
+"$HOME/.claude/plugins/marketplaces/fnow-skills/plugins/gh-issues/skills/gh-issues/scripts/gh-board.py" "$HOME/.codex/skills/gh-issues/scripts/gh-board.py" "plugins/gh-issues/skills/gh-issues/scripts/gh-board.py"
   do
     if [ -f "$candidate" ]; then
       BOARD_SCRIPT="$candidate"
